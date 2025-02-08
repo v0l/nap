@@ -1,0 +1,26 @@
+# Unique app id
+id: "io.nostrlabs.freeflow"
+
+# Display name of the app
+name: "Freeflow"
+
+# Human-readable long description
+description: "Live in the moment"
+
+# Application icon
+icon: "https://freeflow.app/icon.png"
+
+# Banner / Preview of the app
+images:
+  - "https://freeflow.app/banner.jpg"
+
+# Public code repo or project website
+repository: "https://github.com/nostrlabs-io/freeflow"
+
+# SPDX code license
+license: "MIT"
+
+# Descriptive app tags
+tags:
+  - "tiktok"
+  - "shorts"

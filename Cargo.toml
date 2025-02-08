@@ -1,0 +1,28 @@
+[package]
+name = "nap"
+description = "Nostr App Publisher"
+license = "MIT"
+repository = "https://git.v0l.io/Kieran/nap"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "nap"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.95"
+clap = { version = "4.5.28", features = ["derive"] }
+config = { version = "0.15.7", features = ["yaml"] }
+log = "0.4.25"
+nostr-sdk = "0.39.0"
+reqwest = { version = "0.12.12", features = ["json"] }
+tokio = { version = "1.43.0", features = ["fs", "rt", "macros", "rt-multi-thread"] }
+serde = { version = "1.0.217", features = ["derive"] }
+async-trait = "0.1.86"
+apk = "0.4.0"
+zip = "2.2.2"
+semver = "1.0.25"
+indicatif = "0.17.11"
+dialoguer = "0.11.0"
+env_logger = "0.11.6"
