@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
         info!("Starting publish of release {}", release.version);
         info!("Artifacts: ");
         for a in &release.artifacts {
-            info!(" - {}", a.name);
+            info!(" - {}", a);
         }
         if !dialoguer::Confirm::new()
             .default(false)

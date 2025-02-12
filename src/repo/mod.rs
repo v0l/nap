@@ -1,6 +1,6 @@
 use crate::manifest::Manifest;
 use crate::repo::github::GithubRepo;
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use apk::manifest::Sdk;
 use apk::res::Chunk;
 use apk::AndroidManifest;
@@ -13,12 +13,13 @@ use reqwest::Url;
 use semver::Version;
 use serde::Deserialize;
 use sha2::Digest;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env::temp_dir;
+use std::fmt::{write, Display, Formatter};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use tokio::fs::File;
-use tokio::io::{AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncRead, AsyncSeek, AsyncWriteExt, BufReader};
 
 mod github;
 
@@ -32,25 +33,117 @@ pub struct RepoArtifact {
     pub metadata: ArtifactMetadata,
 }
 
+impl Display for RepoArtifact {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} platform={} metadata={}",
+            self.name, self.platform, self.metadata
+        )
+    }
+}
+
 pub enum ArtifactMetadata {
     APK { manifest: AndroidManifest },
 }
 
+impl Display for ArtifactMetadata {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ArtifactMetadata::APK { manifest } => {
+                write!(
+                    f,
+                    "APK id={}, version={}, code={}",
+                    manifest.package.as_ref().unwrap_or(&"missing".to_string()),
+                    manifest.version_name.as_ref().unwrap_or(&String::new()),
+                    manifest.version_code.as_ref().unwrap_or(&0)
+                )
+            }
+        }
+    }
+}
+
 pub enum Platform {
     Android { arch: Architecture },
-    IOS,
+    IOS { arch: Architecture },
     MacOS { arch: Architecture },
     Windows { arch: Architecture },
     Linux { arch: Architecture },
     Web,
 }
 
+impl Display for Platform {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Platform::Android { arch } => write!(
+                f,
+                "android-{}",
+                match arch {
+                    Architecture::ARMv7 => "armeabi-v7a",
+                    Architecture::ARM64 => "arm64-v8a",
+                    Architecture::X86 => "x86",
+                    Architecture::X86_64 => "x86_64",
+                }
+            ),
+            Platform::IOS { arch } => write!(
+                f,
+                "ios-{}",
+                match arch {
+                    Architecture::ARM64 => "arm64",
+                    _ => "unknown",
+                }
+            ),
+            Platform::MacOS { arch } => write!(
+                f,
+                "darwin-{}",
+                match arch {
+                    Architecture::ARM64 => "aarch64",
+                    Architecture::X86 => "x86",
+                    Architecture::X86_64 => "x86_64",
+                    _ => "unknown",
+                }
+            ),
+            Platform::Windows { arch } => write!(
+                f,
+                "windows-{}",
+                match arch {
+                    Architecture::ARM64 => "aarch64",
+                    Architecture::X86 => "x86",
+                    Architecture::X86_64 => "x86_64",
+                    _ => "unknown",
+                }
+            ),
+            Platform::Linux { arch } => write!(
+                f,
+                "linux-{}",
+                match arch {
+                    Architecture::ARM64 => "aarch64",
+                    Architecture::X86 => "x86",
+                    Architecture::X86_64 => "x86_64",
+                    _ => "unknown",
+                }
+            ),
+            Platform::Web => write!(f, "web"),
+        }
+    }
+}
+
 pub enum Architecture {
     ARMv7,
-    ARMv8,
-    X86,
-    AMD64,
     ARM64,
+    X86,
+    X86_64,
+}
+
+impl Display for Architecture {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Architecture::ARMv7 => write!(f, "armeabi-v7a"),
+            Architecture::ARM64 => write!(f, "arm64-v8a"),
+            Architecture::X86 => write!(f, "x86"),
+            Architecture::X86_64 => write!(f, "x86_64"),
+        }
+    }
 }
 
 /// A local/remote location where the artifact is located
@@ -123,7 +216,7 @@ async fn load_artifact(path: &Path) -> Result<RepoArtifact> {
         .unwrap()
     {
         "apk" => load_apk_artifact(path).await,
-        _ => bail!("unknown file extension"),
+        v => bail!("unknown file extension: {v}"),
     }
 }
 
@@ -131,7 +224,43 @@ async fn load_apk_artifact(path: &Path) -> Result<RepoArtifact> {
     let file = File::open(path).await?;
 
     let mut zip = ZipFileReader::with_tokio(BufReader::new(file)).await?;
+    let manifest = load_manifest(&mut zip).await?;
 
+    let lib_arch: HashSet<String> = list_libs(&mut zip)
+        .iter()
+        .filter_map(|p| {
+            PathBuf::from(p)
+                .iter()
+                .skip(1)
+                .next()
+                .map(|p| p.to_str().unwrap().to_owned())
+        })
+        .collect();
+
+    ensure!(lib_arch.len() == 1, "Unknown library architecture");
+
+    Ok(RepoArtifact {
+        name: path.file_name().unwrap().to_str().unwrap().to_string(),
+        size: path.metadata()?.len(),
+        location: RepoResource::Local(path.to_path_buf()),
+        content_type: "application/apk".to_string(),
+        platform: Platform::Android {
+            arch: match lib_arch.iter().next().unwrap().as_str() {
+                "arm64-v8a" => Architecture::ARM64,
+                "armeabi-v7a" => Architecture::ARMv7,
+                "x86_64" => Architecture::X86_64,
+                "x86" => Architecture::X86,
+                v => bail!("unknown architecture: {v}"),
+            },
+        },
+        metadata: ArtifactMetadata::APK { manifest },
+    })
+}
+
+async fn load_manifest<T>(zip: &mut ZipFileReader<T>) -> Result<AndroidManifest>
+where
+    T: AsyncBufRead + AsyncSeek + Unpin,
+{
     const ANDROID_MANIFEST: &'static str = "AndroidManifest.xml";
 
     let idx = zip
@@ -150,18 +279,25 @@ async fn load_apk_artifact(path: &Path) -> Result<RepoArtifact> {
     let mut manifest = zip.reader_with_entry(idx).await?;
     let mut manifest_data = Vec::with_capacity(8192);
     manifest.read_to_end_checked(&mut manifest_data).await?;
-    let manifest: AndroidManifest = parse_android_manifest(&manifest_data)?;
+    let res: AndroidManifest = parse_android_manifest(&manifest_data)?;
+    Ok(res)
+}
 
-    Ok(RepoArtifact {
-        name: path.file_name().unwrap().to_str().unwrap().to_string(),
-        size: path.metadata()?.len(),
-        location: RepoResource::Local(path.to_path_buf()),
-        content_type: "application/apk".to_string(),
-        platform: Platform::Android {
-            arch: Architecture::ARMv8,
-        },
-        metadata: ArtifactMetadata::APK { manifest },
-    })
+fn list_libs<T>(zip: &mut ZipFileReader<T>) -> Vec<String>
+where
+    T: AsyncBufRead + AsyncSeek + Unpin,
+{
+    zip.file()
+        .entries()
+        .iter()
+        .filter_map(|entry| {
+            if entry.filename().as_bytes().starts_with(b"lib/") {
+                Some(entry.filename().as_str().unwrap().to_owned())
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 fn parse_android_manifest(data: &Vec<u8>) -> Result<AndroidManifest> {
@@ -243,7 +379,7 @@ fn find_value_in(
                             .map(|(k, _)| k.clone()),
                         16 => Some(e.typed_value.data.to_string()),
                         _ => {
-                            warn!("unknown data type {},{},{:?}", node, attr, e);
+                            debug!("unknown data type {},{},{:?}", node, attr, e);
                             None
                         }
                     }
