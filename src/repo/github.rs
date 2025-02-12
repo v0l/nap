@@ -1,4 +1,6 @@
-use crate::repo::{Repo, RepoArtifact, RepoRelease, RepoResource};
+use crate::repo::{
+    load_artifact, load_artifact_url, Repo, RepoArtifact, RepoRelease, RepoResource,
+};
 use anyhow::{anyhow, Result};
 use log::{info, warn};
 use nostr_sdk::Url;
@@ -60,46 +62,6 @@ struct GithubReleaseArtifact {
     pub browser_download_url: String,
 }
 
-impl TryFrom<&GithubRelease> for RepoRelease {
-    type Error = anyhow::Error;
-
-    fn try_from(value: &GithubRelease) -> std::result::Result<Self, Self::Error> {
-        Ok(RepoRelease {
-            version: Version::parse(if value.tag_name.starts_with("v") {
-                &value.tag_name[1..]
-            } else {
-                &value.tag_name
-            })?,
-            artifacts: value
-                .assets
-                .iter()
-                .filter_map(|v| match RepoArtifact::try_from(v) {
-                    Ok(art) => Some(art),
-                    Err(e) => {
-                        warn!("Failed to parse artifact {}: {}", &v.name, e);
-                        None
-                    }
-                })
-                .collect(),
-        })
-    }
-}
-
-impl TryFrom<&GithubReleaseArtifact> for RepoArtifact {
-    type Error = anyhow::Error;
-
-    fn try_from(value: &GithubReleaseArtifact) -> std::result::Result<Self, Self::Error> {
-        Ok(RepoArtifact {
-            name: value.name.clone(),
-            size: value.size,
-            content_type: value.content_type.clone(),
-            platform: Platform::IOS,
-            location: RepoResource::Remote(value.browser_download_url.clone()),
-            metadata: (),
-        })
-    }
-}
-
 #[async_trait::async_trait]
 impl Repo for GithubRepo {
     async fn get_releases(&self) -> Result<Vec<RepoRelease>> {
@@ -115,16 +77,33 @@ impl Repo for GithubRepo {
             ))
             .build()?;
 
-        let rsp: Vec<GithubRelease> = self.client.execute(req).await?.json().await?;
-        Ok(rsp
-            .into_iter()
-            .filter_map(|v| match RepoRelease::try_from(&v) {
-                Ok(r) => Some(r),
-                Err(e) => {
-                    warn!("Failed to parse release: {} {}", v.tag_name, e);
-                    None
+        let gh_release: Vec<GithubRelease> = self.client.execute(req).await?.json().await?;
+
+        let mut releases = vec![];
+        for release in gh_release {
+            let mut artifacts = vec![];
+            for gh_artifact in release.assets {
+                match load_artifact_url(&gh_artifact.browser_download_url).await {
+                    Ok(a) => artifacts.push(a),
+                    Err(e) => warn!(
+                        "Failed to load artifact {}: {}",
+                        gh_artifact.browser_download_url, e
+                    ),
                 }
-            })
-            .collect())
+            }
+            if artifacts.is_empty() {
+                warn!("No artifacts found for {}", release.tag_name);
+                continue;
+            }
+            releases.push(RepoRelease {
+                version: Version::parse(if release.tag_name.starts_with("v") {
+                    &release.tag_name[1..]
+                } else {
+                    &release.tag_name
+                })?,
+                artifacts,
+            });
+        }
+        Ok(releases)
     }
 }

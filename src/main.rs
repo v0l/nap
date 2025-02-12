@@ -20,12 +20,11 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::init();
-
     // Set default log level to info
     if std::env::var("RUST_LOG").is_err() {
         std::env::set_var("RUST_LOG", "info");
     }
+    env_logger::init();
 
     let args = Args::parse();
 
