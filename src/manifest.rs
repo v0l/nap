@@ -1,3 +1,4 @@
+use nostr_sdk::{Event, EventBuilder, Kind, Tag};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -14,6 +15,9 @@ pub struct Manifest {
     /// Repo URL
     pub repository: Option<String>,
 
+    /// SPDX license code
+    pub license: Option<String>,
+
     /// App icon
     pub icon: Option<String>,
 
@@ -24,29 +28,32 @@ pub struct Manifest {
     pub tags: Vec<String>,
 }
 
-#[derive(Deserialize)]
-pub enum Platform {
-    Android {
-        arch: Architecture
-    },
-    IOS,
-    MacOS {
-        arch: Architecture
-    },
-    Windows {
-        arch: Architecture
-    },
-    Linux {
-        arch: Architecture
-    },
-    Web
-}
+impl Into<EventBuilder> for &Manifest {
+    fn into(self) -> EventBuilder {
+        let mut b = EventBuilder::new(
+            Kind::Custom(32_267),
+            self.description.clone().unwrap_or_default(),
+        )
+        .tags([
+            Tag::parse(["d", &self.id]).unwrap(),
+            Tag::parse(["name", &self.name]).unwrap(),
+        ]);
+        if let Some(icon) = &self.icon {
+            b = b.tag(Tag::parse(["icon", icon]).unwrap());
+        }
+        if let Some(repository) = &self.repository {
+            b = b.tag(Tag::parse(["repository", repository]).unwrap());
+        }
+        if let Some(license) = &self.license {
+            b = b.tag(Tag::parse(["license", license]).unwrap());
+        }
+        for image in &self.images {
+            b = b.tag(Tag::parse(["image", image]).unwrap());
+        }
+        for tag in &self.tags {
+            b = b.tag(Tag::parse(["t", tag]).unwrap());
+        }
 
-#[derive(Deserialize)]
-pub enum Architecture {
-    ARMv7,
-    ARMv8,
-    X86,
-    AMD64,
-    ARM64
+        b
+    }
 }

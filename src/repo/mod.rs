@@ -1,8 +1,9 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use crate::manifest::Manifest;
 use crate::repo::github::GithubRepo;
 use anyhow::{anyhow, bail, Result};
 use semver::Version;
+use serde::Deserialize;
 
 mod github;
 
@@ -12,6 +13,34 @@ pub struct RepoArtifact {
     pub size: u64,
     pub location: RepoResource,
     pub content_type: String,
+    pub platform: Platform,
+    pub metadata: ArtifactMetadata
+}
+
+pub enum ArtifactMetadata {
+    APK {
+        version_code: u32,
+        min_sdk_version: u32,
+        target_sdk_version: u32,
+        sig_hash: String,
+    }
+}
+
+pub enum Platform {
+    Android { arch: Architecture },
+    IOS,
+    MacOS { arch: Architecture },
+    Windows { arch: Architecture },
+    Linux { arch: Architecture },
+    Web,
+}
+
+pub enum Architecture {
+    ARMv7,
+    ARMv8,
+    X86,
+    AMD64,
+    ARM64,
 }
 
 /// A local/remote location where the artifact is located
@@ -48,4 +77,12 @@ impl TryInto<Box<dyn Repo>> for &Manifest {
 
         Ok(Box::new(GithubRepo::from_url(repo)?))
     }
+}
+
+async fn load_artifact_url(url: &str) -> Result<RepoArtifact> {
+
+}
+
+async fn load_artifact(path: &Path) -> Result<RepoArtifact> {
+
 }

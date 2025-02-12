@@ -93,7 +93,9 @@ impl TryFrom<&GithubReleaseArtifact> for RepoArtifact {
             name: value.name.clone(),
             size: value.size,
             content_type: value.content_type.clone(),
+            platform: Platform::IOS,
             location: RepoResource::Remote(value.browser_download_url.clone()),
+            metadata: (),
         })
     }
 }

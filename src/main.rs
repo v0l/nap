@@ -3,10 +3,11 @@ mod repo;
 
 use crate::manifest::Manifest;
 use crate::repo::Repo;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use clap::Parser;
 use config::{Config, File, FileSourceFile};
 use log::info;
+use nostr_sdk::{EventBuilder, JsonUtil, Keys};
 use std::path::PathBuf;
 
 #[derive(clap::Parser)]
@@ -53,6 +54,24 @@ async fn main() -> Result<()> {
         {
             return Ok(());
         }
+
+        let key = dialoguer::Password::new()
+            .with_prompt("Enter nsec:")
+            .interact()?;
+
+        let key = if let Ok(nsec) = Keys::parse(&key) {
+            nsec
+        } else {
+            bail!("Invalid private key")
+        };
+
+        let ev: EventBuilder = (&manifest).into();
+
+        // create release
+
+        // publish application
+        let ev = ev.build(key.public_key).sign_with_keys(&key)?;
+        info!("{}", ev.as_json());
     }
 
     Ok(())
