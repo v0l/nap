@@ -85,6 +85,12 @@ async fn main() -> Result<()> {
         // publish application
         let app_ev = ev
             .tag(Tag::coordinate(release_coord))
+            .tags(
+                release
+                    .artifacts
+                    .iter()
+                    .filter_map(|a| Tag::parse(["f", a.platform.to_string().as_str()]).ok()),
+            )
             .sign_with_keys(&key)?;
 
         info!("Publishing events..");
