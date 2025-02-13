@@ -2,6 +2,8 @@
 
 Nostr Application Publisher
 
+**Currently only supports GitHub release artifacts for publishing**
+
 ## Install
 
 Install rust toolchain with [rustup](https://rustup.rs/)
