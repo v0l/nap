@@ -46,6 +46,7 @@ impl GithubRepo {
 #[derive(Deserialize)]
 struct GithubRelease {
     pub tag_name: String,
+    pub url: String,
     pub name: String,
     pub draft: bool,
     #[serde(rename = "prerelease")]
@@ -101,6 +102,8 @@ impl Repo for GithubRepo {
                 } else {
                     &release.tag_name
                 })?,
+                description: Some(release.body),
+                url: Some(release.url),
                 artifacts,
             });
         }

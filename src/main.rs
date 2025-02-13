@@ -7,7 +7,8 @@ use anyhow::{anyhow, bail, Result};
 use clap::Parser;
 use config::{Config, File, FileSourceFile};
 use log::info;
-use nostr_sdk::{EventBuilder, JsonUtil, Keys};
+use nostr_sdk::prelude::Coordinate;
+use nostr_sdk::{Client, EventBuilder, JsonUtil, Keys, Kind, Tag};
 use std::path::PathBuf;
 
 #[derive(clap::Parser)]
@@ -16,6 +17,10 @@ struct Args {
     /// User specified config path
     #[arg(long, short)]
     pub config: Option<PathBuf>,
+
+    /// Relay to publish events to
+    #[arg(long)]
+    pub relay: Vec<String>,
 }
 
 #[tokio::main]
@@ -66,11 +71,41 @@ async fn main() -> Result<()> {
 
         let ev: EventBuilder = (&manifest).into();
 
+        let app_id = release.app_id()?;
+        let app_coord = Coordinate::new(Kind::Custom(32_267), key.public_key).identifier(app_id);
+
         // create release
+        let release_list = release
+            .clone()
+            .into_release_list_event(&key, app_coord)
+            .await?;
+        let release_coord = Coordinate::new(Kind::Custom(30_063), key.public_key)
+            .identifier(release.release_tag()?);
 
         // publish application
-        let ev = ev.build(key.public_key).sign_with_keys(&key)?;
-        info!("{}", ev.as_json());
+        let app_ev = ev
+            .tag(Tag::coordinate(release_coord))
+            .sign_with_keys(&key)?;
+
+        info!("Publishing events..");
+        let client = Client::builder().build();
+        for r in &args.relay {
+            info!("Connecting to {}", r);
+            client.add_relay(r).await?;
+        }
+        if args.relay.is_empty() {
+            const DEFAULT_RELAY: &'static str = "wss://relay.zapstore.dev";
+            info!("Connecting to default relay {DEFAULT_RELAY}");
+            client.add_relay(DEFAULT_RELAY).await?;
+        }
+        client.connect().await;
+
+        client.send_event(app_ev).await?;
+        for ev in release_list {
+            client.send_event(ev).await?;
+        }
+
+        info!("Done.");
     }
 
     Ok(())

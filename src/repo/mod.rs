@@ -8,29 +8,45 @@ use async_zip::tokio::read::seek::ZipFileReader;
 use async_zip::ZipFile;
 use log::{debug, info, warn};
 use nostr_sdk::async_utility::futures_util::TryStreamExt;
-use nostr_sdk::prelude::{hex, StreamExt};
+use nostr_sdk::prelude::{hex, Coordinate, StreamExt};
+use nostr_sdk::{Event, EventBuilder, Kind, NostrSigner, Tag};
 use reqwest::Url;
 use semver::Version;
 use serde::Deserialize;
-use sha2::Digest;
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::env::temp_dir;
 use std::fmt::{write, Display, Formatter};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use tokio::fs::File;
-use tokio::io::{AsyncBufRead, AsyncRead, AsyncSeek, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncRead, AsyncReadExt, AsyncSeek, AsyncWriteExt, BufReader};
 
 mod github;
 
 /// Since artifact binary / image
+#[derive(Debug, Clone)]
 pub struct RepoArtifact {
+    /// Artifact name (filename)
     pub name: String,
+
+    /// The size of the artifact in bytes
     pub size: u64,
+
+    /// Where the artifact is located
     pub location: RepoResource,
+
+    /// MIME type
     pub content_type: String,
+
+    /// Platform this artifact runs on
     pub platform: Platform,
+
+    /// Artifact metadata
     pub metadata: ArtifactMetadata,
+
+    /// SHA-256 hash of the artifact
+    pub hash: Option<Vec<u8>>,
 }
 
 impl Display for RepoArtifact {
@@ -43,6 +59,47 @@ impl Display for RepoArtifact {
     }
 }
 
+/// Converts a repo artifact into a NIP-94 event
+impl TryInto<EventBuilder> for RepoArtifact {
+    type Error = anyhow::Error;
+
+    fn try_into(self) -> Result<EventBuilder, Self::Error> {
+        let mut b = EventBuilder::new(Kind::FileMetadata, "").tags([
+            Tag::parse(["f", self.platform.to_string().as_str()])?,
+            Tag::parse(["m", self.content_type.as_str()])?,
+            Tag::parse(["size", self.size.to_string().as_str()])?,
+        ]);
+        if let RepoResource::Remote(u) = self.location {
+            b = b.tag(Tag::parse(["url", u.as_str()])?);
+        }
+        match self.metadata {
+            ArtifactMetadata::APK { manifest } => {
+                if let Some(vn) = manifest.version_name {
+                    b = b.tag(Tag::parse(["version", vn.as_str()])?);
+                }
+                if let Some(vc) = manifest.version_code {
+                    b = b.tag(Tag::parse(["version_code", vc.to_string().as_str()])?);
+                }
+                if let Some(min_sdk) = manifest.sdk.min_sdk_version {
+                    b = b.tag(Tag::parse([
+                        "min_sdk_version",
+                        min_sdk.to_string().as_str(),
+                    ])?);
+                }
+                if let Some(target_sdk) = manifest.sdk.target_sdk_version {
+                    b = b.tag(Tag::parse([
+                        "target_sdk_version",
+                        target_sdk.to_string().as_str(),
+                    ])?);
+                }
+                //TODO: apk sig
+            }
+        }
+        Ok(b)
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum ArtifactMetadata {
     APK { manifest: AndroidManifest },
 }
@@ -63,6 +120,7 @@ impl Display for ArtifactMetadata {
     }
 }
 
+#[derive(Debug, Clone)]
 pub enum Platform {
     Android { arch: Architecture },
     IOS { arch: Architecture },
@@ -128,6 +186,7 @@ impl Display for Platform {
     }
 }
 
+#[derive(Debug, Clone)]
 pub enum Architecture {
     ARMv7,
     ARM64,
@@ -146,16 +205,77 @@ impl Display for Architecture {
     }
 }
 
+#[derive(Debug, Clone)]
 /// A local/remote location where the artifact is located
 pub enum RepoResource {
     Remote(String),
     Local(PathBuf),
 }
 
+#[derive(Debug, Clone)]
 /// A single release with one or more artifacts
 pub struct RepoRelease {
+    /// Release version (semver)
     pub version: Version,
+
+    /// Release changelog/notes
+    pub description: Option<String>,
+
+    /// URL of the release (github release page etc)
+    pub url: Option<String>,
+
+    /// List of artifacts in this release
     pub artifacts: Vec<RepoArtifact>,
+}
+
+impl RepoRelease {
+    pub fn app_id(&self) -> Result<String> {
+        self.artifacts
+            .iter()
+            .find_map(|a| match &a.metadata {
+                ArtifactMetadata::APK { manifest } if manifest.package.is_some() => {
+                    Some(manifest.package.as_ref().unwrap().to_string())
+                }
+                _ => None,
+            })
+            .ok_or(anyhow!("no app_id found"))
+    }
+
+    /// [app_id]@[version]
+    pub fn release_tag(&self) -> Result<String> {
+        Ok(format!("{}@{}", self.app_id()?, self.version.to_string()))
+    }
+
+    /// Create nostr release artifact list event
+    pub async fn into_release_list_event<T: NostrSigner>(
+        self,
+        signer: &T,
+        app_coord: Coordinate,
+    ) -> Result<Vec<Event>> {
+        let mut ret = vec![];
+        let mut b = EventBuilder::new(
+            Kind::Custom(30063),
+            self.description.as_ref().map(|s| s.as_str()).unwrap_or(""),
+        )
+        .tags([
+            Tag::coordinate(app_coord),
+            Tag::parse(["d", &self.release_tag()?])?,
+        ]);
+
+        for a in &self.artifacts {
+            let eb: Result<EventBuilder> = a.clone().try_into();
+            match eb {
+                Ok(a) => {
+                    let e_build = a.sign(signer).await?;
+                    b = b.tag(Tag::event(e_build.id));
+                    ret.push(e_build);
+                }
+                Err(e) => warn!("Failed to convert artifact: {} {}", a, e),
+            }
+        }
+        ret.push(b.sign(signer).await?);
+        Ok(ret)
+    }
 }
 
 /// Generic artifact repository
@@ -205,7 +325,10 @@ async fn load_artifact_url(url: &str) -> Result<RepoArtifact> {
             }
         }
     }
-    load_artifact(&tmp).await
+    let mut a = load_artifact(&tmp).await?;
+    // replace location back to URL for publishing
+    a.location = RepoResource::Remote(url.to_string());
+    Ok(a)
 }
 
 async fn load_artifact(path: &Path) -> Result<RepoArtifact> {
@@ -243,7 +366,8 @@ async fn load_apk_artifact(path: &Path) -> Result<RepoArtifact> {
         name: path.file_name().unwrap().to_str().unwrap().to_string(),
         size: path.metadata()?.len(),
         location: RepoResource::Local(path.to_path_buf()),
-        content_type: "application/apk".to_string(),
+        hash: Some(hash_file(&path).await?),
+        content_type: "application/vnd.android.package-archive".to_string(),
         platform: Platform::Android {
             arch: match lib_arch.iter().next().unwrap().as_str() {
                 "arm64-v8a" => Architecture::ARM64,
@@ -255,6 +379,19 @@ async fn load_apk_artifact(path: &Path) -> Result<RepoArtifact> {
         },
         metadata: ArtifactMetadata::APK { manifest },
     })
+}
+
+async fn hash_file(path: &Path) -> Result<Vec<u8>> {
+    let mut file = File::open(path).await?;
+    let mut hash = Sha256::default();
+    let mut buf = Vec::with_capacity(4096);
+    while let Ok(r) = file.read(&mut buf).await {
+        if r == 0 {
+            break;
+        }
+        hash.update(&buf[..r]);
+    }
+    Ok(hash.finalize().to_vec())
 }
 
 async fn load_manifest<T>(zip: &mut ZipFileReader<T>) -> Result<AndroidManifest>

@@ -34,10 +34,10 @@ impl Into<EventBuilder> for &Manifest {
             Kind::Custom(32_267),
             self.description.clone().unwrap_or_default(),
         )
-        .tags([
-            Tag::parse(["d", &self.id]).unwrap(),
-            Tag::parse(["name", &self.name]).unwrap(),
-        ]);
+            .tags([
+                Tag::parse(["d", &self.id]).unwrap(),
+                Tag::parse(["name", &self.name]).unwrap(),
+            ]);
         if let Some(icon) = &self.icon {
             b = b.tag(Tag::parse(["icon", icon]).unwrap());
         }
