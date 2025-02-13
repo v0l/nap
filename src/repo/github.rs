@@ -106,6 +106,9 @@ impl Repo for GithubRepo {
                 url: Some(release.url),
                 artifacts,
             });
+
+            //TODO: handle more than one release
+            break;
         }
         Ok(releases)
     }
