@@ -5,10 +5,10 @@ use crate::manifest::Manifest;
 use crate::repo::Repo;
 use anyhow::{anyhow, bail, Result};
 use clap::Parser;
-use config::{Config, File, FileSourceFile};
+use config::{Config, File};
 use log::info;
 use nostr_sdk::prelude::Coordinate;
-use nostr_sdk::{Client, EventBuilder, JsonUtil, Keys, Kind, Tag};
+use nostr_sdk::{Client, EventBuilder, Keys, Kind, Tag};
 use std::path::PathBuf;
 
 #[derive(clap::Parser)]
@@ -100,7 +100,7 @@ async fn main() -> Result<()> {
             client.add_relay(r).await?;
         }
         if args.relay.is_empty() {
-            const DEFAULT_RELAY: &'static str = "wss://relay.zapstore.dev";
+            const DEFAULT_RELAY: &str = "wss://relay.zapstore.dev";
             info!("Connecting to default relay {DEFAULT_RELAY}");
             client.add_relay(DEFAULT_RELAY).await?;
         }

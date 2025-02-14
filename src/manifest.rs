@@ -1,4 +1,4 @@
-use nostr_sdk::{Event, EventBuilder, Kind, Tag};
+use nostr_sdk::{EventBuilder, Kind, Tag};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -9,11 +9,17 @@ pub struct Manifest {
     /// Application display name
     pub name: String,
 
-    /// Long app description / release notes
+    /// App description
     pub description: Option<String>,
+
+    /// Long form app description (with markdown)
+    pub summary: Option<String>,
 
     /// Repo URL
     pub repository: Option<String>,
+
+    /// Public project website
+    pub url: Option<String>,
 
     /// SPDX license code
     pub license: Option<String>,
@@ -28,32 +34,43 @@ pub struct Manifest {
     pub tags: Vec<String>,
 }
 
-impl Into<EventBuilder> for &Manifest {
-    fn into(self) -> EventBuilder {
-        let mut b = EventBuilder::new(
-            Kind::Custom(32_267),
-            self.description.clone().unwrap_or_default(),
-        )
+impl From<&Manifest> for EventBuilder {
+    fn from(val: &Manifest) -> Self {
+        let mut b = EventBuilder::new(Kind::Custom(32_267), val.description.as_str_or_empty())
             .tags([
-                Tag::parse(["d", &self.id]).unwrap(),
-                Tag::parse(["name", &self.name]).unwrap(),
+                Tag::parse(["d", &val.id]).unwrap(),
+                Tag::parse(["name", &val.name]).unwrap(),
+                Tag::parse(["url", val.url.as_str_or_empty()]).unwrap(),
             ]);
-        if let Some(icon) = &self.icon {
+        if let Some(s) = &val.summary {
+            b = b.tag(Tag::parse(["summary", s]).unwrap());
+        }
+        if let Some(icon) = &val.icon {
             b = b.tag(Tag::parse(["icon", icon]).unwrap());
         }
-        if let Some(repository) = &self.repository {
+        if let Some(repository) = &val.repository {
             b = b.tag(Tag::parse(["repository", repository]).unwrap());
         }
-        if let Some(license) = &self.license {
+        if let Some(license) = &val.license {
             b = b.tag(Tag::parse(["license", license]).unwrap());
         }
-        for image in &self.images {
+        for image in &val.images {
             b = b.tag(Tag::parse(["image", image]).unwrap());
         }
-        for tag in &self.tags {
+        for tag in &val.tags {
             b = b.tag(Tag::parse(["t", tag]).unwrap());
         }
 
         b
+    }
+}
+
+pub trait AsStrOrEmpty {
+    fn as_str_or_empty(&self) -> &str;
+}
+
+impl AsStrOrEmpty for Option<String> {
+    fn as_str_or_empty(&self) -> &str {
+        self.as_ref().map(|s| s.as_str()).unwrap_or("")
     }
 }

@@ -1,5 +1,5 @@
 use crate::repo::{
-    load_artifact, load_artifact_url, Repo, RepoArtifact, RepoRelease, RepoResource,
+    load_artifact_url, Repo, RepoRelease,
 };
 use anyhow::{anyhow, Result};
 use log::{info, warn};
