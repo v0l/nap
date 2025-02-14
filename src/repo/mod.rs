@@ -44,7 +44,7 @@ pub struct RepoArtifact {
     pub metadata: ArtifactMetadata,
 
     /// SHA-256 hash of the artifact
-    pub hash: Option<Vec<u8>>,
+    pub hash: Vec<u8>,
 }
 
 impl Display for RepoArtifact {
@@ -66,6 +66,7 @@ impl TryInto<EventBuilder> for RepoArtifact {
             Tag::parse(["f", self.platform.to_string().as_str()])?,
             Tag::parse(["m", self.content_type.as_str()])?,
             Tag::parse(["size", self.size.to_string().as_str()])?,
+            Tag::parse(["x", &hex::encode(self.hash)])?
         ]);
         if let RepoResource::Remote(u) = self.location {
             b = b.tag(Tag::parse(["url", u.as_str()])?);
@@ -477,7 +478,7 @@ fn load_artifact(path: &Path) -> Result<RepoArtifact> {
 }
 
 fn load_apk_artifact(path: &Path) -> Result<RepoArtifact> {
-    let file = std::fs::File::open(path)?;
+    let file = File::open(path)?;
     let mut file = std::io::BufReader::new(file);
     let sig_block = load_signing_block(&mut file)?;
 
@@ -500,7 +501,7 @@ fn load_apk_artifact(path: &Path) -> Result<RepoArtifact> {
         name: path.file_name().unwrap().to_str().unwrap().to_string(),
         size: path.metadata()?.len(),
         location: RepoResource::Local(path.to_path_buf()),
-        hash: Some(hash_file(path)?),
+        hash: hash_file(path)?,
         content_type: "application/vnd.android.package-archive".to_string(),
         platform: Platform::Android {
             arch: match lib_arch.iter().next().unwrap().as_str() {
