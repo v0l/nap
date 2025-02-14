@@ -1,0 +1,11 @@
+[package]
+name = "apk-parser"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.95"
+log = "0.4.25"
+hex = "0.4.3"
+byteorder = "1.5.0"
+apk = "0.4.0"
