@@ -1,6 +1,4 @@
-use crate::repo::{
-    load_artifact_url, Repo, RepoRelease,
-};
+use crate::repo::{load_artifact_url, Repo, RepoRelease};
 use anyhow::{anyhow, Result};
 use log::{info, warn};
 use nostr_sdk::Url;
@@ -46,6 +44,7 @@ impl GithubRepo {
 #[derive(Deserialize)]
 struct GithubRelease {
     pub tag_name: String,
+    #[serde(rename = "html_url")]
     pub url: String,
     pub name: String,
     pub draft: bool,
