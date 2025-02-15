@@ -35,20 +35,20 @@ impl ApkSigningBlock {
         for (k, v) in &self.data {
             match *k {
                 V2_SIG_BLOCK_ID => {
-                    let v2 = get_length_prefixed_u32_sequence(v)?;
+                    let v2_block = remove_prefix_layers(v)?;
+                    let v2_block = get_lv_sequence(v2_block)?;
                     ensure!(
-                        v2.len() == 1,
-                        "Expected 1 element in signing block got {}",
-                        v2.len()
+                        v2_block.len() == 3,
+                        "Expected 3 elements in signing block got {}",
+                        v2_block.len()
                     );
-
-                    let v2 = get_length_prefixed_u32_sequence(v2[0])?;
-                    let signed_data = get_sequence(v2[0])?;
+                    let signed_data = get_lv_sequence(v2_block[0])?;
                     let digests = get_sequence_kv(signed_data[0])?;
-                    let certificates = get_sequence(signed_data[1])?;
+                    let certificates = get_lv_sequence(signed_data[1])?;
                     let attributes = get_sequence_kv(signed_data[2])?;
-                    let signatures = get_sequence_kv(v2[1])?;
-                    let public_key = v2[2];
+
+                    let signatures = get_sequence_kv(v2_block[1])?;
+                    let public_key = v2_block[2];
                     let digests: HashMap<u32, &[u8]> = HashMap::from_iter(digests);
                     sigs.push(ApkSignatureBlock::V2 {
                         attributes: HashMap::from_iter(
@@ -60,23 +60,20 @@ impl ApkSigningBlock {
                     });
                 }
                 V3_SIG_BLOCK_ID => {
-                    let v3 = get_length_prefixed_u32_sequence(v)?;
-                    ensure!(
-                        v3.len() == 1,
-                        "Expected 1 element in signing block got {}",
-                        v3.len()
-                    );
+                    let mut v = &v[4..];
+                    let mut v3_block = take_lv_u32(&mut v)?;
 
-                    let v3 = get_length_prefixed_u32_sequence(v3[0])?;
-                    let signed_data = get_sequence(v3[0])?;
-                    let digests = get_sequence_kv(signed_data[0])?;
-                    let certificates = get_sequence(signed_data[1])?;
-                    let min_sdk_signed = u32::from_le_bytes(signed_data[2].try_into()?);
-                    let max_sdk_signed = u32::from_le_bytes(signed_data[3].try_into()?);
-                    let attributes = get_sequence_kv(signed_data[4])?;
+                    let mut signed_data = take_lv_u32(&mut v3_block)?;
+                    let digests = get_sequence_kv(take_lv_u32(&mut signed_data)?)?;
+                    let certificates = get_lv_sequence(take_lv_u32(&mut signed_data)?)?;
+                    let min_sdk_signed = u32::from_le_bytes(signed_data[..4].try_into()?);
+                    let max_sdk_signed = u32::from_le_bytes(signed_data[4..8].try_into()?);
+                    signed_data = &signed_data[8..];
+                    let attributes = get_sequence_kv(take_lv_u32(&mut signed_data)?)?;
 
-                    let min_sdk = u32::from_le_bytes(v3[1].try_into()?);
-                    let max_sdk = u32::from_le_bytes(v3[2].try_into()?);
+                    let min_sdk = u32::from_le_bytes(v3_block[..4].try_into()?);
+                    let max_sdk = u32::from_le_bytes(v3_block[4..8].try_into()?);
+                    v3_block = &v3_block[8..];
 
                     ensure!(
                         min_sdk_signed == min_sdk,
@@ -91,8 +88,8 @@ impl ApkSigningBlock {
                         max_sdk
                     );
 
-                    let signatures = get_sequence_kv(v3[3])?;
-                    let public_key = v3[4];
+                    let signatures = get_sequence_kv(take_lv_u32(&mut v3_block)?)?;
+                    let public_key = take_lv_u32(&mut v3_block)?;
                     let digests: HashMap<u32, &[u8]> = HashMap::from_iter(digests);
 
                     sigs.push(ApkSignatureBlock::V3 {
@@ -257,7 +254,7 @@ where
     let mut magic_buf = [0u8; 16];
     loop {
         let magic_pos = zip.seek(SeekFrom::Current(-17))?;
-        if magic_pos <= 4 {
+        if magic_pos <= 16 {
             bail!("Failed to find signing block");
         }
 
@@ -276,19 +273,19 @@ where
                 size2
             );
 
-            let mut data_bytes = size1 - 8 - 16;
-            let mut sigs = Vec::new();
+            let mut data_bytes = size2 - 16 - 8;
+            let mut blocks = Vec::new();
             loop {
                 let (k, v) = read_u64_length_prefixed_kv(zip)?;
                 data_bytes -= (v.len() + 4 + 8) as u64;
-                sigs.push((k, v));
+                blocks.push((k, v));
                 if data_bytes == 0 {
                     break;
                 }
             }
 
             zip.seek(SeekFrom::Start(0))?;
-            return Ok(ApkSigningBlock { data: sigs });
+            return Ok(ApkSigningBlock { data: blocks });
         }
     }
 }
@@ -302,41 +299,70 @@ where
     let k = file.read_u32::<LittleEndian>()?;
     let v_len = kv_len as usize - 4;
     let mut v = vec![0; v_len];
-    file.read_exact(v.as_mut_slice())?;
+    file.read_exact(&mut v)?;
     Ok((k, v))
 }
 
 #[inline]
-fn get_u64_length_prefixed_kv(slice: &[u8]) -> Result<(u32, &[u8])> {
-    let kv_len = u64::from_le_bytes(slice[..8].try_into()?);
-    let k = u32::from_le_bytes(slice[8..12].try_into()?);
-    Ok((k, &slice[12..(kv_len as usize - 12)]))
+fn get_lv_u32_kv(slice: &[u8]) -> Result<(u32, &[u8])> {
+    let data = get_lv_u32(slice)?;
+    let k = u32::from_le_bytes(data[0..4].try_into()?);
+    Ok((k, &data[4..]))
 }
 
 #[inline]
-fn get_u32_length_prefixed_kv(slice: &[u8]) -> Result<(u32, &[u8])> {
-    let kv_len = u32::from_le_bytes(slice[..4].try_into()?);
-    let k = u32::from_le_bytes(slice[4..8].try_into()?);
-    Ok((k, &slice[8..(kv_len as usize - 8)]))
-}
-
-#[inline]
-fn get_length_prefixed_u32(slice: &[u8]) -> Result<&[u8]> {
-    let len = u32::from_le_bytes(slice[..4].try_into()?);
+fn get_lv_u32(slice: &[u8]) -> Result<&[u8]> {
+    let len = u32::from_le_bytes(slice[0..4].try_into()?);
+    ensure!(
+        len <= (slice.len() - 4) as u32,
+        "Invalid LV sequence {} > {}",
+        len,
+        slice.len(),
+    );
     Ok(&slice[4..4 + len as usize])
 }
 
 #[inline]
-fn get_length_prefixed_u32_sequence(slice: &[u8]) -> Result<Vec<&[u8]>> {
-    let sequence_len = u32::from_le_bytes(slice[..4].try_into()?);
-    get_sequence(&slice[4..4 + sequence_len as usize])
+fn take_lv_u32<'a>(slice: &mut &'a[u8]) -> Result<&'a [u8]> {
+    let len = u32::from_le_bytes(slice[..4].try_into()?);
+    ensure!(
+        len <= (slice.len() - 4) as u32,
+        "Invalid LV sequence {} > {}",
+        len,
+        slice.len(),
+    );
+    let (a, b) = slice[4..].split_at(len as usize);
+    *slice = b;
+    Ok(a)
 }
 
+/// Remove 1 or more prefix layers
+/// IDK why android needs 3 layers of prefixed lengths, maybe its just how it was written in Java,
+/// but it makes no logical sense:
+/// ```yaml
+/// L: (1000)
+///   L: (996)
+///     L: V (740) - SEQ
+///     L: V (252) - SEQ
+/// ```
 #[inline]
-fn get_sequence(mut slice: &[u8]) -> Result<Vec<&[u8]>> {
+fn remove_prefix_layers(mut slice: &[u8]) -> Result<&[u8]> {
+    let l1 = u32::from_le_bytes(slice[..4].try_into()?);
+    loop {
+        slice = &slice[4..];
+        let l2 = u32::from_le_bytes(slice[..4].try_into()?);
+        if l1 != l2 + 4 {
+            return Ok(slice);
+        }
+    }
+}
+
+/// Read 0 or more length prefixed values until the slice is empty
+#[inline]
+fn get_lv_sequence(mut slice: &[u8]) -> Result<Vec<&[u8]>> {
     let mut ret = Vec::new();
     while slice.len() >= 4 {
-        let data = get_length_prefixed_u32(slice)?;
+        let data = get_lv_u32(&slice[..])?;
         let r_len = data.len() + 4;
         slice = &slice[r_len..];
         ret.push(data);
@@ -346,7 +372,7 @@ fn get_sequence(mut slice: &[u8]) -> Result<Vec<&[u8]>> {
 
 #[inline]
 fn get_sequence_kv(slice: &[u8]) -> Result<Vec<(u32, &[u8])>> {
-    let seq = get_sequence(slice)?;
+    let seq = get_lv_sequence(slice)?;
     Ok(seq
         .into_iter()
         .map(|s| {

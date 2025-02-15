@@ -71,26 +71,26 @@ impl TryInto<EventBuilder> for RepoArtifact {
         match self.metadata {
             ArtifactMetadata::APK {
                 manifest,
-                signatures,
+                signature_blocks: signatures,
             } => {
                 for signature in signatures {
                     match signature {
                         ApkSignatureBlock::Unknown { .. } => {
                             warn!("No signature found in metadata");
                         }
-                        ApkSignatureBlock::V2 { signatures, .. } => {
-                            for signature in signatures {
+                        ApkSignatureBlock::V2 { certificates, .. } => {
+                            for certificate in certificates {
                                 b = b.tag(Tag::parse([
                                     "apk_signature_hash",
-                                    &hex::encode(signature.digest),
+                                    &hex::encode(Sha256::digest(certificate)),
                                 ])?);
                             }
                         }
-                        ApkSignatureBlock::V3 { signatures, .. } => {
-                            for signature in signatures {
+                        ApkSignatureBlock::V3 { certificates, .. } => {
+                            for certificate in certificates {
                                 b = b.tag(Tag::parse([
                                     "apk_signature_hash",
-                                    &hex::encode(signature.digest),
+                                    &hex::encode(Sha256::digest(certificate)),
                                 ])?);
                             }
                         }
@@ -124,7 +124,7 @@ impl TryInto<EventBuilder> for RepoArtifact {
 pub enum ArtifactMetadata {
     APK {
         manifest: AndroidManifest,
-        signatures: Vec<ApkSignatureBlock>,
+        signature_blocks: Vec<ApkSignatureBlock>,
     },
 }
 
@@ -133,7 +133,7 @@ impl Display for ArtifactMetadata {
         match self {
             ArtifactMetadata::APK {
                 manifest,
-                signatures,
+                signature_blocks: signatures,
             } => {
                 write!(
                     f,
@@ -173,6 +173,7 @@ impl Display for Platform {
                     Architecture::ARM64 => "arm64-v8a",
                     Architecture::X86 => "x86",
                     Architecture::X86_64 => "x86_64",
+                    Architecture::Universal => "universal",
                 }
             ),
             Platform::IOS { arch } => write!(
@@ -220,6 +221,7 @@ impl Display for Platform {
 
 #[derive(Debug, Clone)]
 pub enum Architecture {
+    Universal,
     ARMv7,
     ARM64,
     X86,
@@ -233,6 +235,7 @@ impl Display for Architecture {
             Architecture::ARM64 => write!(f, "arm64-v8a"),
             Architecture::X86 => write!(f, "x86"),
             Architecture::X86_64 => write!(f, "x86_64"),
+            Architecture::Universal => write!(f, "universal"),
         }
     }
 }
@@ -396,8 +399,6 @@ fn load_apk_artifact(path: &Path) -> Result<RepoArtifact> {
         })
         .collect();
 
-    ensure!(lib_arch.len() == 1, "Unknown library architecture");
-
     Ok(RepoArtifact {
         name: path.file_name().unwrap().to_str().unwrap().to_string(),
         size: path.metadata()?.len(),
@@ -405,17 +406,21 @@ fn load_apk_artifact(path: &Path) -> Result<RepoArtifact> {
         hash: hash_file(path)?,
         content_type: "application/vnd.android.package-archive".to_string(),
         platform: Platform::Android {
-            arch: match lib_arch.iter().next().unwrap().as_str() {
-                "arm64-v8a" => Architecture::ARM64,
-                "armeabi-v7a" => Architecture::ARMv7,
-                "x86_64" => Architecture::X86_64,
-                "x86" => Architecture::X86,
-                v => bail!("unknown architecture: {v}"),
+            arch: if lib_arch.is_empty() {
+                Architecture::Universal
+            } else {
+                match lib_arch.iter().next().unwrap().as_str() {
+                    "arm64-v8a" => Architecture::ARM64,
+                    "armeabi-v7a" => Architecture::ARMv7,
+                    "x86_64" => Architecture::X86_64,
+                    "x86" => Architecture::X86,
+                    v => bail!("unknown architecture: {v}"),
+                }
             },
         },
         metadata: ArtifactMetadata::APK {
             manifest,
-            signatures: sig_block.get_signatures()?,
+            signature_blocks: sig_block.get_signatures()?,
         },
     })
 }
@@ -423,7 +428,7 @@ fn load_apk_artifact(path: &Path) -> Result<RepoArtifact> {
 fn hash_file(path: &Path) -> Result<Vec<u8>> {
     let mut file = File::open(path)?;
     let mut hash = Sha256::default();
-    let mut buf = Vec::with_capacity(4096);
+    let mut buf = vec![0; 4096];
     while let Ok(r) = file.read(&mut buf) {
         if r == 0 {
             break;
@@ -471,7 +476,11 @@ mod tests {
         let path = "/home/kieran/Downloads/snort-arm64-v8a-v0.3.0.apk";
 
         let apk = load_apk_artifact(&PathBuf::from(path))?;
-        eprint!("{}", apk);
-        Ok(())
+
+        eprintln!("{:?}", apk);
+        if let ArtifactMetadata::APK { .. } = apk.metadata {
+            return Ok(());
+        }
+        bail!("missing apk metadata");
     }
 }
