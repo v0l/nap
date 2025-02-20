@@ -1,10 +1,36 @@
 use anyhow::{bail, Result};
 use apk::res::Chunk;
 use apk::AndroidManifest;
-use log::debug;
+use log::{debug, trace};
 use std::collections::HashMap;
+use std::fmt::Write;
 use std::io::Cursor;
 
+/// Converts [Chunk::Xml] to actual XML string
+pub fn xml_chunk_to_xml(chunk: &Chunk) -> Result<String> {
+    let nodes = if let Chunk::Xml(nodes) = chunk {
+        nodes
+    } else {
+        bail!("Not an XML chunk")
+    };
+
+    let mut buf = String::with_capacity(4096);
+    for node in nodes {
+        match node {
+            Chunk::Xml(x) => buf.write_str(&xml_chunk_to_xml(&Chunk::Xml(x.clone()))?)?,
+            Chunk::XmlStartNamespace(_, _) => {}
+            Chunk::XmlEndNamespace(_, _) => {}
+            Chunk::XmlStartElement(_, _, _) => {}
+            Chunk::XmlEndElement(_, _) => {}
+            Chunk::XmlResourceMap(_) => {}
+            Chunk::TablePackage(_, _) => {}
+            Chunk::TableType(_, _, _) => {}
+            Chunk::TableTypeSpec(_, _) => {}
+            _ => trace!("Skipping chunk: {:?}", node),
+        }
+    }
+    Ok(buf)
+}
 /// Parse android manifest from AndroidManifest.xml file data
 pub fn parse_android_manifest(data: &[u8]) -> Result<AndroidManifest> {
     let chunks = if let Chunk::Xml(chunks) = Chunk::parse(&mut Cursor::new(data))? {

@@ -94,6 +94,16 @@ impl TryInto<EventBuilder> for RepoArtifact {
                                 ])?);
                             }
                         }
+                        ApkSignatureBlock::Nostr {
+                            signature,
+                            public_key,
+                        } => {
+                            b = b.tag(Tag::parse([
+                                "apk_nostr_signature",
+                                &hex::encode(public_key),
+                                &hex::encode(signature),
+                            ])?);
+                        }
                     }
                 }
                 if let Some(vn) = manifest.version_name {

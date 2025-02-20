@@ -30,6 +30,7 @@ impl ApkSigningBlock {
     pub fn get_signatures(&self) -> Result<Vec<ApkSignatureBlock>> {
         const V2_SIG_BLOCK_ID: u32 = 0x7109871a;
         const V3_SIG_BLOCK_ID: u32 = 0xf05368c0;
+        const NOSTR_SIG_BLOCK_ID: u32 = 0x4e535452; // "NSTR"
 
         let mut sigs = vec![];
         for (k, v) in &self.data {
@@ -158,6 +159,12 @@ pub enum ApkSignatureBlock {
         min_sdk: u32,
         max_sdk: u32,
     },
+
+    /// Nostr Schnorr sig
+    Nostr {
+        signature: Vec<u8>,
+        public_key: Vec<u8>,
+    },
 }
 
 impl Display for ApkSignatureBlock {
@@ -190,6 +197,15 @@ impl Display for ApkSignatureBlock {
                 }
                 Ok(())
             }
+            ApkSignatureBlock::Nostr {
+                public_key,
+                signature,
+            } => write!(
+                f,
+                "Nostr: pubkey={}, sig={}",
+                hex::encode(&public_key),
+                hex::encode(&signature)
+            ),
         }
     }
 }
@@ -323,7 +339,7 @@ fn get_lv_u32(slice: &[u8]) -> Result<&[u8]> {
 }
 
 #[inline]
-fn take_lv_u32<'a>(slice: &mut &'a[u8]) -> Result<&'a [u8]> {
+fn take_lv_u32<'a>(slice: &mut &'a [u8]) -> Result<&'a [u8]> {
     let len = u32::from_le_bytes(slice[..4].try_into()?);
     ensure!(
         len <= (slice.len() - 4) as u32,
